@@ -4,13 +4,14 @@ project(ext)
 include(FetchContent)
 message(STATUS "Fetching/configuring OSQP")
 list(APPEND CMAKE_MESSAGE_INDENT "  ")
-FetchContent_Declare(
-  osqp
-  GIT_REPOSITORY https://github.com/osqp/osqp.git
-  GIT_TAG develop-1.0-diff)
+#FetchContent_Declare(
+#  osqp
+#  GIT_REPOSITORY https://github.com/osqp/osqp.git
+#  GIT_TAG develop-1.0-diff)
 
 list(POP_BACK CMAKE_MESSAGE_INDENT)
-FetchContent_MakeAvailable(osqp)
+#FetchContent_MakeAvailable(osqp)
+add_subdirectory(/home/vineetb/osqp /home/vineetb/osqp/build)
 
 FetchContent_Declare(
   pybind11

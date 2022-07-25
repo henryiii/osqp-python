@@ -205,6 +205,7 @@ class CmdCMakeBuild(build_ext):
                       '-DBUILD_TESTING=OFF']
 
         cfg = 'Debug' if self.debug else 'Release'
+        cfg = 'Debug'
         build_args = ['--config', cfg]
 
         if system() == "Windows":
@@ -227,7 +228,7 @@ class CmdCMakeBuild(build_ext):
         os.makedirs(self.build_temp)
 
         _ext_name = ext.name.split('.')[-1]
-        cmake_args.extend([f'-DOSQP_EXT_MODULE_NAME={_ext_name}'])
+        cmake_args.extend([f'-DOSQP_EXT_MODULE_NAME={_ext_name}', '-DPRINTING=OFF'])
 
         # What variables from the environment do we wish to pass on to cmake as variables?
         cmake_env_vars = ('CMAKE_CUDA_COMPILER', 'CUDA_TOOLKIT_ROOT_DIR', 'MKL_DIR', 'MKL_ROOT')

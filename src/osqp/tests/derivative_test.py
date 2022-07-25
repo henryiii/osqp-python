@@ -58,7 +58,7 @@ class derivative_tests(unittest.TestCase):
         # Get gradients by solving with osqp
         m = osqp.OSQP()
         m.setup(P, q, A, l, u, eps_abs=eps_abs, eps_rel=eps_rel,
-                max_iter=max_iter, verbose=True, scaling=0)
+                max_iter=max_iter, verbose=True)
         results = m.solve()
         if results.info.status != "solved":
             raise ValueError("Problem not solved!")
@@ -328,7 +328,7 @@ class derivative_tests(unittest.TestCase):
             print('dP_fd: ', np.round(dP_fd.data, decimals=4))
             print('dA: ', np.round(dP.data, decimals=4))
 
-        npt.assert_allclose(dP.todense(), dP_fd.todense(),
+        npt.assert_allclose(dP, dP_fd.todense(),
                             rtol=rel_tol, atol=abs_tol)
 
     def test_dl_dA(self, verbose=False):
@@ -363,7 +363,7 @@ class derivative_tests(unittest.TestCase):
             print('dA_fd: ', np.round(dA_fd.data, decimals=4))
             print('dA: ', np.round(dA.data, decimals=4))
 
-        npt.assert_allclose(dA.todense(), dA_fd.todense(),
+        npt.assert_allclose(dA, dA_fd.todense(),
                             rtol=rel_tol, atol=abs_tol)
 
     def test_dl_dl(self, verbose=False):
@@ -468,7 +468,7 @@ class derivative_tests(unittest.TestCase):
             print('dA_fd: ', np.round(dA_fd.data, decimals=6))
             print('dA_qdldl: ', np.round(dA_qdldl.data, decimals=6))
 
-        npt.assert_allclose(dA_qdldl.todense(), dA_fd.todense(),
+        npt.assert_allclose(dA_qdldl, dA_fd.todense(),
                             rtol=rel_tol, atol=abs_tol)
 
     def test_dl_dq_eq(self, verbose=False):

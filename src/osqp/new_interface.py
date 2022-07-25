@@ -49,6 +49,19 @@ class OSQP:
         assert value in ('direct', 'indirect')
         self.settings.linsys_solver = self.ext.osqp_linsys_solver_type.OSQP_DIRECT_SOLVER if value == 'direct' else self.ext.osqp_linsys_solver_type.OSQP_INDIRECT_SOLVER
 
+    def _as_dense(self, m):
+        if isinstance(m, self.ext.CSC):
+            m = spa.csc_matrix((m.x, m.i, m.p)).todense()
+        elif isinstance(m, spa.csc_matrix):
+            m = m.todense()
+        return np.array(m)
+
+    def _csc_triu_as_csc_full(self, m):
+        _m_triu_dense = self._as_dense(m)
+        _m_full_dense = np.tril(_m_triu_dense.T, -1) + _m_triu_dense
+        _m_full_csc = spa.csc_matrix(_m_full_dense)
+        return self.ext.CSC(_m_full_csc)
+
     def constant(self, which):
         return constant(which, algebra=self.algebra)
 
@@ -169,18 +182,21 @@ class OSQP:
         return results
 
     def codegen(self, folder, project_type='', parameters='vectors', python_ext_name='emosqp', force_rewrite=False,
-                FLOAT=False, LONG=False, prefix='', compile=False):
+                use_float=False, printing_enable=False, profiling_enable=False, interrupt_enable=False,
+                include_codegen_src=False, use_long=False, prefix='', compile=False):
 
-        assert project_type in (None, ''), 'project_type should be blank/None, and is only provided for backwards API compatibility'
+        assert project_type in (None, ''), \
+            'project_type should be blank/None, and is only provided for backwards API compatibility'
         assert parameters in ('vectors', 'matrices'), 'Unknown parameters specification'
-        assert not LONG, 'Long ("long long" in C) is no longer supported in codegen. We only support C89 compliant version of the long ints'
+        assert not use_long, 'Long ("long long" in C) is no longer supported in codegen. ' \
+                             'We only support C89 compliant version of the long ints'
 
         defines = self.ext.OSQPCodegenDefines()
         defines.embedded_mode = 1 if parameters == 'vectors' else 2
-        defines.float_type = 1 if FLOAT else 0
-        defines.printing_enable = 0
-        defines.profiling_enable = 0
-        defines.interrupt_enable = 0
+        defines.float_type = 1 if use_float else 0
+        defines.printing_enable = 1 if printing_enable else 0
+        defines.profiling_enable = 1 if profiling_enable else 0
+        defines.interrupt_enable = 1 if interrupt_enable else 0
 
         # The C codegen call expects the folder to exist and have a trailing slash
         folder = os.path.abspath(folder)
@@ -215,7 +231,7 @@ class OSQP:
         return sol
 
     def adjoint_derivative(self, dx=None, dy_u=None, dy_l=None,
-                           P_idx=None, A_idx=None, **kwargs):
+                           P_idx=None, A_idx=None, as_dense=True, dP_as_triu=True, **kwargs):
         """
         Compute adjoint derivative after solve.
         """
@@ -249,8 +265,18 @@ class OSQP:
 
         if A_idx is None:
             A_idx = A.nonzero()
+        else:
+            # Do we ever get A_idx that is not all the non 0s?
+            assert np.all(A_idx[0]==A.nonzero()[0])
+            assert np.all(A_idx[1]==A.nonzero()[1])
+
         if P_idx is None:
             P_idx = P.nonzero()
+        else:
+            # Do we ever get P_idx that is not all the non 0s?
+            assert np.all(P_idx[0] == P.nonzero()[0])
+            assert np.all(P_idx[1] == P.nonzero()[1])
+
         if dy_u is None:
             dy_u = np.zeros(m)
         if dy_l is None:
@@ -269,7 +295,7 @@ class OSQP:
         dlambd = np.concatenate([dy_l_ineq[l_non_inf], dy_u_ineq[u_non_inf]])
 
         rhs = - np.concatenate([dx, dlambd, dnu])
-        
+
         if 'eps_iter_ref' in kwargs:
             eps_iter_ref = kwargs['eps_iter_ref']
         else:
@@ -288,7 +314,7 @@ class OSQP:
         ])
         delta_B = spa.bmat([[eps_iter_ref * spa.eye(n + num_ineq + num_eq), None],
                             [None, -eps_iter_ref * spa.eye(n + num_ineq + num_eq)]],
-                            format='csc')
+                           format='csc')
         if self._derivative_cache.get('solver') is None:
             solver = qdldl.Solver(B + delta_B)
             self._derivative_cache['M'] = B
@@ -297,7 +323,6 @@ class OSQP:
         r_sol_b = self.derivative_iterative_refinement(
             rhs_b, max_iter, tol)
         dual, primal = np.split(r_sol_b, [n + num_ineq + num_eq])
-        
 
         r_x_b, r_lambda_l_b, r_lambda_u_b, r_nu = np.split(
             primal, [n, n + l_non_inf.size, n + num_ineq])
@@ -349,19 +374,39 @@ class OSQP:
 
         # In the following call to the C extension, the first 3 are inputs, the remaining are outputs
         self._solver.adjoint_derivative(dx, dy_l, dy_u, _dP, _dq, _dA, _dl, _du)
+        # dP, dq, dA, dl, du = _dP, _dq, _dA, _dl, _du
+
+        if not dP_as_triu:
+            dP = self._csc_triu_as_csc_full(dP)
 
         tol = 0.0001
         assert np.allclose(_dl, dl, atol=tol)
         assert np.allclose(_du, du, atol=tol)
         assert np.allclose(_dq, dq, atol=tol)
-        assert np.all(_dP.i == dP.indices)
-        assert np.all(_dP.p == dP.indptr)
-        assert np.allclose(_dP.x, dP.data, atol=tol)
-        assert np.all(_dA.i == dA.indices)
-        assert np.all(_dA.p == dA.indptr)
-        assert np.allclose(_dA.x, dA.data, atol=tol)
+        if hasattr(dP, 'indices'):
+            assert np.all(_dP.i == dP.indices)
+            assert np.all(_dP.p == dP.indptr)
+            assert np.allclose(_dP.x, dP.data, atol=tol)
+        else:
+            assert np.all(_dP.i == dP.i)
+            assert np.all(_dP.p == dP.p)
+            assert np.allclose(_dP.x, dP.x, atol=tol)
+        if hasattr(dA, 'indices'):
+            assert np.all(_dA.i == dA.indices)
+            assert np.all(_dA.p == dA.indptr)
+            assert np.allclose(_dA.x, dA.data, atol=tol)
+        else:
+            assert np.all(_dA.i == dA.i)
+            assert np.all(_dA.p == dA.p)
+            assert np.allclose(_dA.x, dA.x, atol=tol)
         # -------- CHECK ---------
 
+        if as_dense:
+            dP = self._as_dense(dP)
+            dA = self._as_dense(dA)
+
+        if isinstance(dA, spa.csc_matrix):
+            dA = self.ext.CSC(dA)
         return dP, dq, dA, dl, du
 
     def forward_derivative(self, dP=None, dq=None, dA=None, dl=None, du=None,
@@ -452,8 +497,8 @@ class OSQP:
             tol = 1e-12
         delta_B = spa.bmat([[eps_iter_ref * spa.eye(n + num_ineq + num_eq), None],
                             [None, -eps_iter_ref * spa.eye(n + num_ineq + num_eq)]],
-                            format='csc')
-        
+                           format='csc')
+
         solver = qdldl.Solver(B + delta_B)
         self._derivative_cache['M'] = B
         self._derivative_cache['solver'] = solver
@@ -528,10 +573,10 @@ class OSQP:
             [dia_lambda @ G, spa.diags(slacks), None],
             [A_eq, None, None]
         ], format='csc')
-        out_dict = {'M': M, 'P': P, 'q': q, 'A': A, 'l': l, 'u': u, 
+        out_dict = {'M': M, 'P': P, 'q': q, 'A': A, 'l': l, 'u': u,
                     'A_eq': A_eq, 'b': b, 'G': G, 'h': h, 'l_non_inf': l_non_inf,
                     'u_non_inf': u_non_inf, 'num_eq': num_eq, 'num_ineq': num_ineq,
-                    'lambd': lambd, 'nu': nu, 'eq_indices': eq_indices, 'ineq_indices': ineq_indices, 
+                    'lambd': lambd, 'nu': nu, 'eq_indices': eq_indices, 'ineq_indices': ineq_indices,
                     'y_ineq': y_ineq, 'y_l_ineq': y_l_ineq, 'y_u_ineq': y_u_ineq}
         return out_dict
         # return M, P, q, A, l, u, A_eq, b, G, h, l_non_inf, u_non_inf, num_eq, num_ineq, lambd, nu, eq_indices, ineq_indices, y_ineq, y_l_ineq, y_u_ineq
